@@ -138,12 +138,22 @@ def main() -> None:
     """Entry point for `make eval` (milestone 3: benchmarks only)."""
     feats = pd.read_parquet(FEATURES_PATH)
     matches = pd.read_parquet(MATCHES_PATH)
-    results = run_benchmarks(feats, matches)
+    fresh = run_benchmarks(feats, matches)
     RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if RESULTS_PATH.exists():
+        # Idempotent merge: replace benchmark rows, keep any model rows, so
+        # `make all` (train before eval) never wipes trained results.
+        existing = pd.read_csv(RESULTS_PATH)
+        keep = existing[~existing["model"].isin(fresh["model"].unique())]
+        results = pd.concat([keep, fresh], ignore_index=True)
+    else:
+        results = fresh
+    results = results.sort_values(
+        ["model", "feature_set", "test_season"]).reset_index(drop=True)
     results.to_csv(RESULTS_PATH, index=False)
     print(f"wrote {RESULTS_PATH} ({len(results)} rows)")
     print("-- mean log_loss / accuracy per benchmark --")
-    for model, g in results.groupby("model"):
+    for model, g in fresh.groupby("model"):
         print(f"{model}: log_loss={g['log_loss'].mean():.4f} "
               f"(std {g['log_loss'].std():.4f}), "
               f"accuracy={g['accuracy'].mean():.4f} "

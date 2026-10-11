@@ -278,6 +278,7 @@ def append_results(new: pd.DataFrame, path: str = RESULTS_PATH) -> pd.DataFrame:
     key = ["model", "feature_set", "test_season"]
     merged = pd.concat([existing, new], ignore_index=True)
     merged = merged.drop_duplicates(subset=key, keep="last").reset_index(drop=True)
+    merged = merged.sort_values(key).reset_index(drop=True)
     merged.to_csv(path, index=False)
     return merged
 
