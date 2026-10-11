@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "epl"
+version = "0.0.0"
+description = "EPL match prediction from pre-match info only"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas",
+    "scikit-learn",
+    "lightgbm",
+    "pyarrow",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
