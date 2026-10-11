@@ -1,0 +1,13 @@
+# Local-only specs (per user request: not committed)
+docs/
+AGENTS.md
+
+# Derived data and caches (never commit)
+data/raw/
+data/processed/
+__pycache__/
+*.pyc
+*.parquet
+.venv/
+.ipynb_checkpoints/
+.DS_Store
