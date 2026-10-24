@@ -5,6 +5,7 @@ AGENTS.md
 # Derived data and caches (never commit)
 data/raw/
 data/processed/
+data/fixtures.csv
 __pycache__/
 *.pyc
 *.parquet

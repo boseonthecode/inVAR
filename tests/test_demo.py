@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from epl.data import AVG_COLS, B365_COLS, STAT_COLS, TARGET_MAP
+from epl.demo import TEMPLATE_PATH, infer_season, load_fixtures
 from epl.features import build_features
 
 MATCHES = Path("data/processed/matches.parquet")
@@ -125,3 +126,56 @@ def test_incomplete_new_season_seeds_newcomers_at_init(matches: pd.DataFrame) ->
 
 def _feature_cols(df: pd.DataFrame) -> list[str]:
     return [c for c in df.columns if c not in KEY_COLS]
+
+
+def test_load_fixtures_parses_schema(tmp_path: Path) -> None:
+    path = tmp_path / "fixtures.csv"
+    path.write_text(
+        "date,home_team,away_team,home_goals,away_goals,result,"
+        "b365_home,b365_draw,b365_away\n"
+        "15/08/2026,Man City,Chelsea,,,,2.00,3.50,3.80\n"
+        "2026-08-16,liverpool,Arsenal,1,2,,3.00,3.40,2.30\n"
+    )
+    fx = load_fixtures(path)
+    assert len(fx) == 2
+    assert list(fx["season"].unique()) == ["2026/27"]
+    assert fx.iloc[0]["HomeTeam"] == "Manchester City"
+    assert fx.iloc[0]["AwayTeam"] == "Chelsea"
+    assert pd.isna(fx.iloc[0]["FTR"])
+    assert fx.iloc[1]["FTR"] == "A"
+    assert fx.iloc[1]["target"] == 2
+    assert fx.iloc[0]["b365_home_prob"] > 0
+    probs = fx[["b365_home_prob", "b365_draw_prob", "b365_away_prob"]].sum(axis=1)
+    assert ((probs - 1.0).abs() < 1e-9).all()
+
+
+def test_load_fixtures_default_season(tmp_path: Path) -> None:
+    path = tmp_path / "fixtures.csv"
+    path.write_text("date,home_team,away_team\n2026-08-15,Arsenal,Chelsea\n")
+    fx = load_fixtures(path, default_season="2026/27")
+    assert fx.iloc[0]["season"] == "2026/27"
+
+
+def test_load_fixtures_requires_columns(tmp_path: Path) -> None:
+    path = tmp_path / "fixtures.csv"
+    path.write_text("date,home_team\n2026-08-15,Arsenal\n")
+    with pytest.raises(ValueError, match="missing required"):
+        load_fixtures(path)
+
+
+def test_load_fixtures_rejects_bad_date(tmp_path: Path) -> None:
+    path = tmp_path / "fixtures.csv"
+    path.write_text("date,home_team,away_team\nnot-a-date,Arsenal,Chelsea\n")
+    with pytest.raises(ValueError, match="invalid or missing date"):
+        load_fixtures(path)
+
+
+def test_template_loads() -> None:
+    fx = load_fixtures(TEMPLATE_PATH)
+    assert len(fx) == 3
+    assert list(fx["season"].unique()) == ["2026/27"]
+
+
+def test_infer_season() -> None:
+    assert infer_season(pd.Timestamp("2026-08-15")) == "2026/27"
+    assert infer_season(pd.Timestamp("2026-05-24")) == "2025/26"
