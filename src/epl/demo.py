@@ -43,6 +43,7 @@ except ImportError:  # pragma: no cover - optional dependency
 DEFAULT_FIXTURES = Path("data/fixtures.csv")
 DEFAULT_HISTORY = Path("data/processed/matches.parquet")
 TEMPLATE_PATH = Path("data/fixtures.example.csv")
+RESULTS_PATH = Path("reports/results.csv")
 
 REQUIRED_COLUMNS = ["date", "home_team", "away_team"]
 STAT_MAP = {
@@ -191,10 +192,7 @@ def load_fixtures(path: str | Path, default_season: str | None = None) -> pd.Dat
     df["B365D"] = _optional_numeric(df, "b365_draw")
     df["B365A"] = _optional_numeric(df, "b365_away")
 
-    for col, out in zip(
-        B365_COLS,
-        ["b365_home_prob", "b365_draw_prob", "b365_away_prob"],
-    ):
+    for out in ["b365_home_prob", "b365_draw_prob", "b365_away_prob"]:
         df[out] = np.nan
     valid = df[B365_COLS].notna().all(axis=1) & (df[B365_COLS] > 0).all(axis=1)
     if valid.any():
@@ -414,11 +412,11 @@ def _history_text(preds: pd.DataFrame) -> str:
 
 
 def _render_plain(
-    preds: pd.DataFrame, fixtures_path: Path, feature_set: str, seed: int
+    preds: pd.DataFrame, source: str, feature_set: str, seed: int
 ) -> None:
     summary = summarize(preds)
     print(f"EPL live demo | logreg/{feature_set} | seed={seed}")
-    print(f"fixtures: {fixtures_path}")
+    print(f"source: {source}")
     has_market = preds[BOOK_PROB_COLS].notna().all(axis=1).any()
     header = f"{'Date':<11} {'Home':<18} {'Away':<16} {'H/D/A':>8} {'Pick':>4}"
     if has_market:
@@ -454,7 +452,7 @@ def _render_plain(
 
 def _render_rich(
     preds: pd.DataFrame,
-    fixtures_path: Path,
+    source: str,
     feature_set: str,
     seed: int,
     no_color: bool,
@@ -463,7 +461,7 @@ def _render_rich(
     console = Console(no_color=no_color)
     console.print(Panel.fit(
         f"[bold]EPL live demo[/bold]  logreg/{feature_set}  seed={seed}\n"
-        f"fixtures: {fixtures_path}",
+        f"source: {source}",
         border_style="cyan",
     ))
     table = Table(
@@ -528,15 +526,15 @@ def _render_rich(
 
 def render_predictions(
     preds: pd.DataFrame,
-    fixtures_path: Path,
+    source: str,
     feature_set: str,
     seed: int,
     no_color: bool = False,
 ) -> None:
     if Table is None:
-        _render_plain(preds, fixtures_path, feature_set, seed)
+        _render_plain(preds, source, feature_set, seed)
     else:
-        _render_rich(preds, fixtures_path, feature_set, seed, no_color)
+        _render_rich(preds, source, feature_set, seed, no_color)
 
 
 def run_demo(
@@ -563,8 +561,224 @@ def run_demo(
     combined = combine_matches(history, fixtures)
     feats = build_features(combined)
     preds = predict_fixtures(feats, fixtures, combined, feature_set, seed)
-    render_predictions(preds, fixtures_path, feature_set, seed, no_color)
+    render_predictions(preds, str(fixtures_path), feature_set, seed, no_color)
     return 0
+
+
+def show_leakage(
+    results_path: str | Path = RESULTS_PATH, no_color: bool = False
+) -> int:
+    """Show the honest walk-forward result next to the leaky replication."""
+    results_path = Path(results_path)
+    if not results_path.exists():
+        print(f"error: {results_path} missing; run `make all` first")
+        return 1
+    results = pd.read_csv(results_path)
+    honest = results[(results["model"] == "logreg")
+                     & (results["feature_set"] == "P1")]
+    book = results[results["model"] == "bookmaker"]
+    leaky = results[results["model"] == "leaky_random80"]
+    if honest.empty:
+        print("error: results.csv has no honest logreg/P1 rows")
+        return 1
+    honest_ll = float(honest["log_loss"].mean())
+    honest_acc = float(honest["accuracy"].mean())
+    honest_lo = float(honest["accuracy"].min())
+    honest_hi = float(honest["accuracy"].max())
+    book_ll = float(book["log_loss"].mean()) if not book.empty else float("nan")
+    book_acc = float(book["accuracy"].mean()) if not book.empty else float("nan")
+    leaky_acc = float(leaky["accuracy"].iloc[0]) if not leaky.empty else float("nan")
+    premium = leaky_acc - honest_acc if not np.isnan(leaky_acc) else float("nan")
+
+    rows = [
+        (f"honest logreg/P1 ({len(honest)} test seasons)", honest_ll, honest_acc),
+        ("bookmaker benchmark", book_ll, book_acc),
+    ]
+    if not np.isnan(leaky_acc):
+        rows.append(("leaky random 80/20 (pooled)", float("nan"), leaky_acc))
+
+    if Table is None:
+        print("honest vs leaky")
+        for label, ll, acc in rows:
+            ll_text = "n/a" if np.isnan(ll) else f"{ll:.4f}"
+            print(f"  {label:<42} log loss {ll_text:>7}  accuracy {acc:.3f}")
+        print(f"honest per-season accuracy range: {honest_lo:.3f}..{honest_hi:.3f}")
+        if not np.isnan(premium):
+            print(f"leakage premium: +{premium * 100:.1f} accuracy points")
+        print("why: full-season averages include the match itself and later games; "
+              "the random split shuffles time.")
+    else:
+        console = Console(no_color=no_color)
+        table = Table(
+            title="Honest walk-forward vs leaky replication",
+            header_style="bold cyan",
+            padding=(0, 1),
+        )
+        table.add_column("row")
+        table.add_column("log loss", justify="right")
+        table.add_column("accuracy", justify="right")
+        for label, ll, acc in rows:
+            ll_text = "n/a" if np.isnan(ll) else f"{ll:.4f}"
+            table.add_row(label, ll_text, f"{acc:.3f}")
+        console.print(table)
+        lines = [
+            f"honest per-season accuracy range: {honest_lo:.3f}..{honest_hi:.3f}",
+        ]
+        if not np.isnan(premium):
+            lines.append(
+                f"[bold]leakage premium[/bold]: +{premium * 100:.1f} accuracy points"
+            )
+        lines += [
+            "leaky features are full-season team averages: they include the",
+            "match itself and matches played after it, and the 80/20 split",
+            "shuffles matches across seasons. The extra points are future",
+            "information, not skill. See src/epl/leaky.py and",
+            "tests/test_no_leakage.py for the honest guards.",
+        ]
+        console.print(Panel("\n".join(lines), title="Why the leaky row is higher",
+                            border_style="yellow"))
+    return 0
+
+
+def show_about(no_color: bool = False) -> int:
+    """Print the methodology and headline numbers for a presentation."""
+    honest_ll = honest_acc = book_ll = book_acc = leaky_acc = float("nan")
+    if RESULTS_PATH.exists():
+        results = pd.read_csv(RESULTS_PATH)
+        honest = results[(results["model"] == "logreg")
+                         & (results["feature_set"] == "P1")]
+        book = results[results["model"] == "bookmaker"]
+        leaky = results[results["model"] == "leaky_random80"]
+        if not honest.empty:
+            honest_ll = float(honest["log_loss"].mean())
+            honest_acc = float(honest["accuracy"].mean())
+        if not book.empty:
+            book_ll = float(book["log_loss"].mean())
+            book_acc = float(book["accuracy"].mean())
+        if not leaky.empty:
+            leaky_acc = float(leaky["accuracy"].iloc[0])
+
+    lines = [
+        "Goal: predict H/D/A from everything known strictly before kickoff,",
+        "and compare honestly with de-overrounded bookmaker probabilities.",
+        "",
+        "Protocol: walk-forward by season. For each test season, train on",
+        "earlier seasons, tune on the season just before it, and score the",
+        "test season once. No shuffling across seasons.",
+        "",
+        "Guards: date-ordered Elo/rolling features with same-date batching;",
+        "train-only imputation and scaling; test season never used for tuning;",
+        "bookmaker odds are a benchmark, never a training feature.",
+        "",
+        f"Headline (12 test seasons): logreg/P1 {honest_ll:.4f} log loss / "
+        f"{honest_acc:.1%} accuracy; bookmaker {book_ll:.4f} / {book_acc:.1%}.",
+        f"Leaky replication: {leaky_acc:.1%} accuracy vs {honest_acc:.1%} honest.",
+        "No honest model beats the bookmaker.",
+        "",
+        "This live demo uses logreg/P1 with fixed C=1.0, trained on all",
+        "matches before each fixture. It is an inference tool, not a new",
+        "headline result; reports/results.csv remains the evaluation.",
+    ]
+    if Panel is None:
+        print("\n".join(lines))
+    else:
+        Console(no_color=no_color).print(
+            Panel("\n".join(lines), title="Methodology", border_style="cyan")
+        )
+    return 0
+
+
+def run_historical(
+    history_path: str | Path = DEFAULT_HISTORY,
+    season: str | None = "2025/26",
+    match_id: str | None = None,
+    feature_set: str = "P1",
+    seed: int = SEED,
+    no_color: bool = False,
+) -> int:
+    """Rehearse a prediction on a completed match, revealing the result."""
+    try:
+        history = load_history(history_path)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}")
+        return 1
+    if match_id is not None:
+        row = history[history["match_id"] == match_id]
+        if row.empty:
+            print(f"error: match_id not found: {match_id}")
+            return 1
+    else:
+        season = season or "2025/26"
+        candidates = history[history["season"] == season]
+        if candidates.empty:
+            seasons = ", ".join(sorted(history["season"].unique()))
+            print(f"error: no matches for {season}; available: {seasons}")
+            return 1
+        row = candidates.sort_values("Date").tail(1)
+
+    print(f"building features for historical match {row.iloc[0]['match_id']}...")
+    feats = build_features(history)
+    preds = predict_fixtures(feats, row, history, feature_set, seed)
+    label = f"historical rehearsal: {row.iloc[0]['season']}"
+    render_predictions(preds, label, feature_set, seed, no_color)
+    return 0
+
+
+def _render_match_choices(
+    matches: pd.DataFrame, season: str, no_color: bool
+) -> None:
+    if Table is None:
+        print(f"last {len(matches)} matches in {season}")
+        for i, (_, row) in enumerate(matches.iterrows(), start=1):
+            print(f"  {i:>2}. {row['Date'].date()}  {row['HomeTeam']} vs "
+                  f"{row['AwayTeam']}")
+        return
+    console = Console(no_color=no_color)
+    table = Table(
+        title=f"Last {len(matches)} matches in {season}",
+        header_style="bold cyan",
+        padding=(0, 1),
+    )
+    table.add_column("#", justify="right")
+    table.add_column("Date")
+    table.add_column("Home")
+    table.add_column("Away")
+    for i, (_, row) in enumerate(matches.iterrows(), start=1):
+        table.add_row(
+            str(i), str(row["Date"].date()), row["HomeTeam"], row["AwayTeam"]
+        )
+    console.print(table)
+
+
+def interactive_historical(args: argparse.Namespace) -> None:
+    season = _ask("Season", "2025/26")
+    try:
+        history = load_history(args.history)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}")
+        return
+    candidates = history[history["season"] == season]
+    if candidates.empty:
+        seasons = ", ".join(sorted(history["season"].unique()))
+        print(f"no matches for {season}; available: {seasons}")
+        return
+    tail = (
+        candidates.sort_values("Date").tail(10).reset_index(drop=True)
+    )
+    _render_match_choices(tail, season, args.no_color)
+    answer = _ask("Match number", str(len(tail)))
+    try:
+        idx = int(answer) - 1
+    except ValueError:
+        print("error: match number must be an integer")
+        return
+    if not 0 <= idx < len(tail):
+        print(f"error: choose 1..{len(tail)}")
+        return
+    match_id = tail.iloc[idx]["match_id"]
+    run_historical(
+        args.history, season, match_id, args.features, args.seed, args.no_color
+    )
 
 
 def _ask(prompt: str, default: str) -> str:
@@ -578,7 +792,10 @@ def interactive_menu(args: argparse.Namespace) -> None:
     while True:
         print("\nEPL live demo")
         print("  1. Predict fixtures from a CSV")
-        print("  2. Quit")
+        print("  2. Rehearse on a historical match")
+        print("  3. Leakage contrast")
+        print("  4. Methodology / talking points")
+        print("  5. Quit")
         choice = _ask("Choose", "1")
         if choice == "1":
             path = _ask("Fixture CSV", str(DEFAULT_FIXTURES))
@@ -586,7 +803,13 @@ def interactive_menu(args: argparse.Namespace) -> None:
                 Path(path), args.history, args.season, args.features,
                 args.seed, args.no_color,
             )
-        elif choice in ("2", "q", "quit", "exit"):
+        elif choice == "2":
+            interactive_historical(args)
+        elif choice == "3":
+            show_leakage(no_color=args.no_color)
+        elif choice == "4":
+            show_about(no_color=args.no_color)
+        elif choice in ("5", "q", "quit", "exit"):
             break
         else:
             print("unknown choice")
@@ -607,12 +830,28 @@ def main() -> None:
         "--features", default="P1", choices=["P1", "P2", "P3", "P4"]
     )
     parser.add_argument("--template", action="store_true")
+    parser.add_argument("--leakage", action="store_true")
+    parser.add_argument("--about", action="store_true")
+    parser.add_argument(
+        "--historical", nargs="?", const="2025/26", default=None,
+        metavar="SEASON",
+    )
+    parser.add_argument("--match-id", default=None)
     parser.add_argument("--no-color", action="store_true")
     parser.add_argument("--seed", type=int, default=SEED)
     args = parser.parse_args()
     if args.template:
         print_template()
         return
+    if args.leakage:
+        raise SystemExit(show_leakage(no_color=args.no_color))
+    if args.about:
+        raise SystemExit(show_about(no_color=args.no_color))
+    if args.historical is not None:
+        raise SystemExit(run_historical(
+            args.history, args.historical, args.match_id, args.features,
+            args.seed, args.no_color,
+        ))
     if args.fixtures is not None:
         raise SystemExit(run_demo(
             args.fixtures, args.history, args.season, args.features,

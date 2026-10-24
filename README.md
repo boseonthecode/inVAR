@@ -11,7 +11,8 @@ test season once).
 ```bash
 pip install -e ".[dev]"
 make all          # data -> features -> train -> eval -> plots
-python -m pytest  # 10 checks (data + no-leakage)
+python -m pytest  # data, no-leakage and demo checks
+make demo         # interactive current-season fixture demo
 ```
 
 `make data` downloads the E0 season CSVs (2009/10–2025/26) from
@@ -22,6 +23,41 @@ chunks work too, e.g. `python -m epl.models --models logreg --sets P1`.
 `python -m epl.leaky` is a one-off leakage demonstration (not part of
 `make all`). Dependencies are pinned in `pyproject.toml`; all seeds are 42.
 Detailed specs live in `docs/` (local-only, not committed).
+
+## Live demo (fixtures you supply)
+
+The canonical dataset ends at 2025/26. To predict the season you are
+following, copy `data/fixtures.example.csv` to `data/fixtures.csv` (ignored
+by git) and fill it in. Required columns are `date`, `home_team` and
+`away_team`; the rest are optional:
+
+| column | meaning |
+| --- | --- |
+| `date` | kickoff date, `YYYY-MM-DD` or `DD/MM/YYYY` |
+| `home_team`, `away_team` | team names; common aliases are handled |
+| `home_goals`, `away_goals` | full-time goals; required for played matches |
+| `result` | `H/D/A`; derived from goals if omitted |
+| `b365_home`, `b365_draw`, `b365_away` | decimal odds; benchmark only |
+| `home_shots`, `away_shots`, `home_sot`, `away_sot`, `home_corners`, `away_corners` | optional stats for P3/P4 |
+| `season` | inferred from `date` if omitted |
+
+```bash
+python -m epl.demo --fixtures data/fixtures.csv
+python -m epl.demo --fixtures data/fixtures.csv --features P4
+python -m epl.demo --historical 2025/26   # rehearse, then reveal the result
+python -m epl.demo --leakage               # honest vs leaky comparison
+python -m epl.demo --about                 # methodology talking points
+python -m epl.demo                         # interactive menu
+```
+
+Each fixture is predicted by `logreg/P1` (fixed `C=1.0`, seed 42) trained on
+matches dated strictly before that fixture. Imputation and scaling come from
+that training block only. Rows with results update Elo/form for later fixtures
+and are also backtested as-of kickoff. If you supply only upcoming fixtures,
+form is anchored at the end of 2025/26; include completed current-season rows
+to keep it current. Output uses `rich` when available and falls back to plain
+text. The demo is an inference tool, not a new headline result:
+`reports/results.csv` remains the walk-forward evaluation.
 
 ## Results (mean over 12 walk-forward test seasons, 2014/15–2025/26)
 

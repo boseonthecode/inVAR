@@ -16,6 +16,8 @@ from epl.demo import (
     infer_season,
     load_fixtures,
     predict_fixtures,
+    show_about,
+    show_leakage,
     summarize,
 )
 from epl.features import build_features
@@ -261,3 +263,11 @@ def test_upcoming_fixture_prediction(matches: pd.DataFrame, tmp_path: Path) -> N
     assert row["train_rows"] == len(matches)
     assert summarize(preds)["n_upcoming"] == 1
 
+
+
+def test_leakage_and_about_render(capsys: pytest.CaptureFixture[str]) -> None:
+    assert show_leakage(no_color=True) == 0
+    assert show_about(no_color=True) == 0
+    out = capsys.readouterr().out.lower()
+    assert "leakage premium" in out
+    assert "methodology" in out
