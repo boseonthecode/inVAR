@@ -6,9 +6,20 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+
 from epl.data import AVG_COLS, B365_COLS, STAT_COLS, TARGET_MAP
-from epl.demo import TEMPLATE_PATH, infer_season, load_fixtures
+from epl.demo import (
+    TEMPLATE_PATH,
+    combine_matches,
+    infer_season,
+    load_fixtures,
+    predict_fixtures,
+    summarize,
+)
 from epl.features import build_features
+from epl.models import feature_sets
 
 MATCHES = Path("data/processed/matches.parquet")
 
@@ -179,3 +190,74 @@ def test_template_loads() -> None:
 def test_infer_season() -> None:
     assert infer_season(pd.Timestamp("2026-08-15")) == "2026/27"
     assert infer_season(pd.Timestamp("2026-05-24")) == "2025/26"
+
+
+def _direct_p1_fit(
+    feats: pd.DataFrame, pred: pd.DataFrame, date: pd.Timestamp
+) -> np.ndarray:
+    cols = feature_sets()["P1"]
+    train = feats[(feats["Date"] < date) & feats["target"].notna()]
+    med = np.nanmedian(train[cols].to_numpy(dtype=float), axis=0)
+    med = np.where(np.isnan(med), 0.0, med)
+    x = np.where(
+        np.isnan(train[cols].to_numpy(dtype=float)), med,
+        train[cols].to_numpy(dtype=float),
+    )
+    scaler = StandardScaler().fit(x)
+    clf = LogisticRegression(max_iter=1000, C=1.0, random_state=42)
+    clf.fit(scaler.transform(x), train["target"].to_numpy(dtype=int))
+    return clf.predict_proba(scaler.transform(np.where(
+        np.isnan(pred[cols].to_numpy(dtype=float)), med,
+        pred[cols].to_numpy(dtype=float),
+    )))
+
+
+def test_prediction_matches_direct_fit(
+    matches: pd.DataFrame, full_features: pd.DataFrame
+) -> None:
+    row = matches[matches["season"] == "2025/26"].iloc[[100]].reset_index(drop=True)
+    preds = predict_fixtures(full_features, row, matches, "P1", 42)
+    assert len(preds) == 1
+    frow = full_features[full_features["match_id"] == row.iloc[0]["match_id"]]
+    expected = _direct_p1_fit(full_features, frow, row.iloc[0]["Date"])[0]
+    got = preds.iloc[0]
+    assert np.allclose(
+        [got["p_home"], got["p_draw"], got["p_away"]], expected, atol=1e-10
+    )
+    assert got["actual"] == row.iloc[0]["FTR"]
+    assert got["correct"] == (got["pick"] == got["actual"])
+    assert got["cutoff"] < got["date"]
+
+
+def test_prediction_ignores_later_matches(
+    matches: pd.DataFrame, full_features: pd.DataFrame
+) -> None:
+    row = matches[matches["season"] == "2025/26"].iloc[[100]].reset_index(drop=True)
+    full = predict_fixtures(full_features, row, matches, "P1", 42).iloc[0]
+    truncated = matches[matches["Date"] <= row.iloc[0]["Date"]]
+    feats = build_features(truncated)
+    short = predict_fixtures(feats, row, truncated, "P1", 42).iloc[0]
+    assert np.allclose(
+        [full["p_home"], full["p_draw"], full["p_away"]],
+        [short["p_home"], short["p_draw"], short["p_away"]],
+        atol=1e-10,
+    )
+
+
+def test_upcoming_fixture_prediction(matches: pd.DataFrame, tmp_path: Path) -> None:
+    path = tmp_path / "fixtures.csv"
+    path.write_text(
+        "date,home_team,away_team\n2026-08-15,Arsenal,Chelsea\n"
+    )
+    fixtures = load_fixtures(path)
+    combined = combine_matches(matches, fixtures)
+    feats = build_features(combined)
+    preds = predict_fixtures(feats, fixtures, combined, "P1", 42)
+    assert len(preds) == 1
+    row = preds.iloc[0]
+    assert np.isclose(row["p_home"] + row["p_draw"] + row["p_away"], 1.0)
+    assert pd.isna(row["actual"])
+    assert row["cutoff"] < row["date"]
+    assert row["train_rows"] == len(matches)
+    assert summarize(preds)["n_upcoming"] == 1
+

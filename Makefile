@@ -1,7 +1,7 @@
-.PHONY: data features train eval plots all help
+.PHONY: data features train eval plots demo all help
 
 help:
-	@echo "Targets: data features train eval plots all"
+	@echo "Targets: data features train eval plots demo all"
 
 data:
 	python -m epl.data
@@ -17,5 +17,8 @@ eval:
 
 plots:
 	python -m epl.plots
+
+demo:
+	python -m epl.demo
 
 all: data features train eval plots
