@@ -56,6 +56,8 @@ def _prev_season_positions(df: pd.DataFrame) -> dict[str, dict[str, float]]:
         gd: dict[str, float] = {}
         gf: dict[str, float] = {}
         for row in g.itertuples():
+            if row.FTR not in POINTS:
+                continue
             hp, ap = POINTS[row.FTR]
             pts[row.HomeTeam] = pts.get(row.HomeTeam, 0) + hp
             pts[row.AwayTeam] = pts.get(row.AwayTeam, 0) + ap
@@ -211,6 +213,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         for idx in group.index:
             home, away = df.loc[idx, "HomeTeam"], df.loc[idx, "AwayTeam"]
             ftr = df.loc[idx, "FTR"]
+            if ftr not in POINTS:
+                continue
             hp, ap = POINTS[ftr]
             history.setdefault(home, []).append({
                 "pts": hp, "scored": df.loc[idx, "FTHG"],

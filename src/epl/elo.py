@@ -17,6 +17,7 @@ import pandas as pd
 INIT_RATING = 1500.0
 K = 20.0
 HOME_ADV = 60.0
+FULL_SEASON_TEAMS = 20
 
 
 def expected_home(r_home: float, r_away: float, h: float = HOME_ADV) -> float:
@@ -53,7 +54,14 @@ def compute_elo(
                 for team in squads[season]:
                     ratings.setdefault(team, init)
             else:
-                relegated = squads[prev_season] - squads[season]
+                # Only infer the relegated set when the new season looks
+                # complete. A demo fixture file may contain just a few of the
+                # 20 teams, in which case the set difference would wrongly
+                # treat most of the league as relegated.
+                if len(squads[season]) >= FULL_SEASON_TEAMS:
+                    relegated = squads[prev_season] - squads[season]
+                else:
+                    relegated = set()
                 if relegated and all(t in ratings for t in relegated):
                     seed = sum(ratings[t] for t in relegated) / len(relegated)
                 else:
@@ -72,6 +80,10 @@ def compute_elo(
         elo_away.extend(r for _, r in rows)
         # Update phase: apply results afterwards.
         for idx, ftr in zip(group.index, group["FTR"]):
+            if ftr not in ("H", "D", "A"):
+                # Unplayed fixture: features were read above, but there is
+                # no result to feed back into the ratings.
+                continue
             ht, at = df.loc[idx, "HomeTeam"], df.loc[idx, "AwayTeam"]
             rh, ra = ratings[ht], ratings[at]
             e_home = expected_home(rh, ra, h)
