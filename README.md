@@ -11,7 +11,8 @@ test season once).
 ```bash
 pip install -e ".[dev]"
 make all          # data -> features -> train -> eval -> plots
-python -m pytest  # data, no-leakage and demo checks
+make table        # previous-season table baseline + logreg/PT
+python -m pytest  # data, no-leakage, table and demo checks
 make demo         # interactive current-season fixture demo
 ```
 
@@ -20,6 +21,8 @@ football-data.co.uk into `data/raw` (read-only), writes
 `data/processed/matches.parquet` (6,460 rows) plus a data card.
 `make train` runs the full model grid (~50 min, mostly SVMs); per-model
 chunks work too, e.g. `python -m epl.models --models logreg --sets P1`.
+`make table` adds the previous-season table benchmark and the table-only
+logreg/PT model (a couple of minutes), appending to `reports/results.csv`.
 `python -m epl.leaky` is a one-off leakage demonstration (not part of
 `make all`). Dependencies are pinned in `pyproject.toml`; all seeds are 42.
 Detailed specs live in `docs/` (local-only, not committed).
@@ -102,6 +105,26 @@ Class-weighted variants (`logreg_draww`, `lgbm_draww`) lift draw recall to
 33–54% at a ~8-point accuracy cost; the `|pH−pA| < margin` decision rule
 (margin tuned on the validation season) adds small recall gains for free.
 See `reports/results.csv` (`*_drawrule`, `*_draww` rows).
+
+### Table-only analysis
+
+Using only the **previous season's final table** (rank, points, goal
+difference), the "higher-placed team always wins" rule never predicts a draw
+and reaches **0.5044** accuracy — better than class priors but well below the
+bookmaker and Elo-only logreg. A logreg trained on the same table-gap
+features (`PT`) reaches 1.0000 log loss / 0.5167 accuracy, so the table adds
+little beyond what Elo already captures on its own. Promoted sides are ranked
+21/22/23 by first appearance and inherit the prior season's 20th-placed
+points/GD/GF as a proxy; details in `docs/featuresandmodels.md`.
+
+| model | set | log_loss | accuracy |
+| --- | --- | --- | --- |
+| bookmaker | none | 0.9611 | 0.5478 |
+| logreg | P1 | 0.9804 | 0.5384 |
+| logreg | PT | 1.0000 | 0.5167 |
+| class_priors | none | 1.0685 | 0.4441 |
+| table_higher_wins | none | 2.2926 | 0.5044 |
+| always_home | none | 2.5691 | 0.4441 |
 
 ## Leakage discussion
 
