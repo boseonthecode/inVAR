@@ -13,8 +13,11 @@ per game. ``home_home_ppg_N`` = home team's points per game over its last N
 ``h2h_home_share5`` = share of the last 5 head-to-head meetings won by the
 current home team (draws count half); NaN when fewer than 5 prior meetings,
 with ``h2h_count`` recording how many exist. ``*_prev_pos`` = previous
-season's final league rank; promoted sides get 21/22/23 by order of first
-appearance in the new season (true promotion order is not in our data).
+season's final league rank; ``*_prev_pts``/``*_prev_gd``/``*_prev_gf`` are
+that season's final totals. Promoted sides get ranks 21/22/23 by order of
+first appearance in the new season (true promotion order is not in our
+data) and copy the prior season's 20th-placed points/GD/GF as a proxy,
+since their Championship record is not comparable to Premier League points.
 
 Usage: python -m epl.features
 """
@@ -41,14 +44,8 @@ def _mean_or_nan(values: list[float], n: int) -> float:
     return sum(values[-n:]) / n
 
 
-def _prev_season_positions(df: pd.DataFrame) -> dict[str, dict[str, float]]:
-    """Final league rank per team per season, keyed by the *next* season.
-
-    Returns {season: {team: rank}} where rank applies to matches played in
-    ``season`` based on the table of the season before it. Promoted sides
-    (absent the prior season) get 21/22/23 by first-appearance order.
-    The first season maps every team to NaN.
-    """
+def _season_tables(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Final league table (pts, gd, gf, rank) per season."""
     df = df.sort_values("Date").reset_index(drop=True)
     tables: dict[str, pd.DataFrame] = {}
     for season, g in df.groupby("season", sort=False):
@@ -71,14 +68,34 @@ def _prev_season_positions(df: pd.DataFrame) -> dict[str, dict[str, float]]:
         ).sort_values(["pts", "gd", "gf"], ascending=False).reset_index(drop=True)
         table["rank"] = table.index + 1
         tables[season] = table
+    return tables
+
+
+def _prev_season_table(df: pd.DataFrame) -> dict[str, dict[str, dict[str, float]]]:
+    """Previous season's final table keyed by the *next* season.
+
+    Returns {season: {team: {"rank", "pts", "gd", "gf"}}} where the values
+    are the team's final totals in the season before ``season``. Promoted
+    sides (absent the prior season) get ranks 21/22/23 by first-appearance
+    order and the prior season's 20th-placed points/GD/GF as a proxy. The
+    first season maps every team to an empty table.
+    """
+    tables = _season_tables(df)
     seasons = list(df["season"].unique())
-    out: dict[str, dict[str, float]] = {}
+    out: dict[str, dict[str, dict[str, float]]] = {}
     for i, season in enumerate(seasons):
         if i == 0:
             out[season] = {}
             continue
         prev = tables[seasons[i - 1]]
-        ranks = dict(zip(prev["team"], prev["rank"]))
+        detail = {
+            row.team: {"rank": float(row.rank), "pts": float(row.pts),
+                       "gd": float(row.gd), "gf": float(row.gf)}
+            for row in prev.itertuples()
+        }
+        last = prev.sort_values("rank").iloc[-1]
+        proxy = {"pts": float(last["pts"]), "gd": float(last["gd"]),
+                 "gf": float(last["gf"])}
         squad_now = set(df.loc[df["season"] == season, "HomeTeam"]) | set(
             df.loc[df["season"] == season, "AwayTeam"]
         )
@@ -91,9 +108,9 @@ def _prev_season_positions(df: pd.DataFrame) -> dict[str, dict[str, float]]:
                 t,
             ),
         )
-        mapping = dict(ranks)
+        mapping = dict(detail)
         for j, team in enumerate(promoted):
-            mapping[team] = 21 + j
+            mapping[team] = {"rank": float(21 + j), **proxy}
         out[season] = mapping
     return out
 
@@ -102,7 +119,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     """Build P1-P4 features for every row of a cleaned matches frame."""
     df = df.sort_values("Date").reset_index(drop=True).copy()
     df = compute_elo(df)
-    pos_by_season = _prev_season_positions(df)
+    pos_by_season = _prev_season_table(df)
 
     history: dict[str, list[dict]] = {}
     last_date: dict[str, pd.Timestamp] = {}
@@ -204,10 +221,18 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
                 ) / 5.0
             else:
                 feat["h2h_home_share5"] = float("nan")
-            pos = pos_by_season.get(season, {})
-            feat["home_prev_pos"] = pos.get(home, float("nan"))
-            feat["away_prev_pos"] = pos.get(away, float("nan"))
+            table = pos_by_season.get(season, {})
+            hprev, aprev = table.get(home, {}), table.get(away, {})
+            feat["home_prev_pos"] = hprev.get("rank", float("nan"))
+            feat["away_prev_pos"] = aprev.get("rank", float("nan"))
             feat["prev_pos_diff"] = feat["home_prev_pos"] - feat["away_prev_pos"]
+            feat["home_prev_pts"] = hprev.get("pts", float("nan"))
+            feat["away_prev_pts"] = aprev.get("pts", float("nan"))
+            feat["prev_pts_diff"] = feat["home_prev_pts"] - feat["away_prev_pts"]
+            feat["prev_pos_gap"] = feat["away_prev_pos"] - feat["home_prev_pos"]
+            feat["prev_gd_diff"] = hprev.get("gd", float("nan")) - aprev.get(
+                "gd", float("nan")
+            )
             rows.append(feat)
         # Append phase: results become visible only to strictly later dates.
         for idx in group.index:
