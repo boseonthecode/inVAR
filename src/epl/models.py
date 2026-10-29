@@ -1,4 +1,4 @@
-"""Models on P1-P4 with walk-forward evaluation.
+"""Models on P1-P4 and PT with walk-forward evaluation.
 
 Models (each returns H/D/A probabilities):
 - logreg: multinomial logistic regression, L2, scaled inputs; tune C.
@@ -48,6 +48,10 @@ RESULTS_PATH = "reports/results.csv"
 
 KEY_COLS = ["match_id", "Date", "season", "HomeTeam", "AwayTeam", "FTR", "target"]
 P1_COLS = ["elo_home", "elo_away", "elo_diff"]
+TABLE_COLS = [
+    "home_prev_pos", "away_prev_pos", "prev_pos_diff", "prev_pos_gap",
+    "home_prev_pts", "away_prev_pts", "prev_pts_diff", "prev_gd_diff",
+]
 
 
 def _aspect_cols(aspect: str, n: int) -> list[str]:
@@ -61,14 +65,14 @@ def _aspect_cols(aspect: str, n: int) -> list[str]:
 
 
 def feature_sets() -> dict[str, list[str]]:
-    """Nested P1-P4 column lists."""
+    """Nested P1-P4 column lists plus the table-only PT set."""
     p2 = P1_COLS + [c for n in (5, 10) for a in ("ppg", "gs", "gc", "split")
                     for c in _aspect_cols(a, n)]
     p3 = p2 + [c for n in (5, 10) for a in ("shots", "sot", "acc", "corners")
                for c in _aspect_cols(a, n)]
     p4 = p3 + ["home_rest", "away_rest", "rest_diff", "h2h_home_share5",
                "h2h_count", "home_prev_pos", "away_prev_pos", "prev_pos_diff"]
-    return {"P1": P1_COLS, "P2": p2, "P3": p3, "P4": p4}
+    return {"P1": P1_COLS, "P2": p2, "P3": p3, "P4": p4, "PT": TABLE_COLS}
 
 
 NEEDS_SCALING = {"logreg", "logreg_draww", "svm_rbf", "svm_poly", "mlp"}
