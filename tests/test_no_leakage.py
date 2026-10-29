@@ -31,6 +31,8 @@ FEATURE_COLS = [
     "home_rest", "away_rest", "rest_diff",
     "h2h_home_share5", "h2h_count",
     "home_prev_pos", "away_prev_pos", "prev_pos_diff",
+    "home_prev_pts", "away_prev_pts", "prev_pts_diff",
+    "prev_pos_gap", "prev_gd_diff",
 ]
 
 
