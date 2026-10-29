@@ -10,6 +10,11 @@ Benchmarks (no training, no tuning):
   loss; the 1% floor is documented here and applied identically every season).
 - class_priors: class distribution of the *training* seasons only.
 - bookmaker: de-overrounded Bet365 implied probabilities from matches.parquet.
+- table_higher_wins: use the previous season's final table and always pick
+  the higher-placed side (home if its rank is lower, away otherwise; ties and
+  missing ranks fall back to home). Draws are never predicted. Probabilities
+  use the same 0.01 floor as always_home so log loss stays finite; accuracy
+  is the headline for this rule.
 
 Metrics: log loss (primary), Brier score vs one-hot (primary), accuracy and
 per-class precision/recall (secondary). results.csv columns:
@@ -100,6 +105,21 @@ def prior_proba(train: pd.DataFrame, n: int) -> np.ndarray:
     return np.tile(dist.to_numpy(), (n, 1))
 
 
+def table_higher_proba(test_matches: pd.DataFrame) -> np.ndarray:
+    """Pick the higher-placed side from the previous season's final table.
+
+    Home rank < away rank -> home; away rank < home rank -> away. Ties and
+    missing ranks fall back to home (home advantage). No draws predicted.
+    """
+    home_rank = test_matches["home_prev_pos"].to_numpy(dtype=float)
+    away_rank = test_matches["away_prev_pos"].to_numpy(dtype=float)
+    pick = np.where(away_rank < home_rank, 2, 0)
+    e = ALWAYS_HOME_EPS
+    proba = np.full((len(pick), 3), e)
+    proba[np.arange(len(pick)), pick] = 1.0 - 2 * e
+    return proba
+
+
 def bookmaker_proba(test_matches: pd.DataFrame) -> np.ndarray:
     """De-overrounded Bet365 probabilities, H/D/A column order."""
     return test_matches[
@@ -123,6 +143,7 @@ def run_benchmarks(
         candidates = {
             "always_home": always_home_proba(len(test)),
             "class_priors": prior_proba(train, len(test)),
+            "table_higher_wins": table_higher_proba(test),
             "bookmaker": book.loc[test["match_id"]].to_numpy(),
         }
         for model, proba in candidates.items():
